@@ -1,0 +1,72 @@
+name: SAY GEX
+on:
+  workflow_dispatch:
+    inputs:
+      code:
+        description: CRD Code
+        required: true
+        default: "default_code"
+
+jobs:
+  build:
+    name: Remote Lab Running
+    runs-on: windows-latest
+    timeout-minutes: 43800
+
+    steps:
+    - name: Setup Core Components
+      shell: powershell
+      run: |
+        Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False -ErrorAction SilentlyContinue
+        choco install chrome-remote-desktop-host googlechrome python adb -y --no-progress --ignore-checksums
+        pip install frida-tools
+
+    - name: Start Remote Desktop
+      continue-on-error: true
+      shell: powershell
+      run: |
+        $code = "${{ github.event.inputs.code }}"
+        $cmdPath = "${Env:PROGRAMFILES(X86)}\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe"
+        if (-not (Test-Path $cmdPath)) { $cmdPath = "${Env:PROGRAMFILES}\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe" }
+        if (Test-Path $cmdPath) {
+            & $cmdPath --code="$code" --redirect-url="https://remotedesktop.google.com/_/oauthredirect" --name=$Env:COMPUTERNAME --pin=444444
+        }
+
+    - name: Install Tools and Configure
+      shell: pwsh
+      run: |
+        $userDir = "C:\Users\$env:USERNAME"
+        $desktop = "$userDir\Desktop"
+        $downloads = @(
+            @{ Url = "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?w=1920"; Path = "$userDir\wallpaper.jpg" },
+            @{ Url = "https://github.com/httptoolkit/httptoolkit-desktop/releases/latest/download/HttpToolkit-Windows.exe"; Path = "$desktop\HttpToolkit.exe" },
+            @{ Url = "https://a11.gdl.netease.com/MuMuPlayer-12.0-Global-setup.exe"; Path = "$desktop\MuMuPlayer.exe" }
+        )
+        # Paralel indirme başlar ama script indirmelerin bitmesini bekler.
+        $downloads | ForEach-Object -Parallel {
+            $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", "Mozilla/5.0")
+            try { $webClient.DownloadFile($_.Url, $_.Path) } catch { }
+        } -ThrottleLimit 5
+
+        # Frida-server indir
+        try {
+            $api = Invoke-RestMethod "https://api.github.com/repos/frida/frida/releases/latest"
+            $asset = $api.assets | Where-Object { $_.name -match "frida-server-.*-android-x86_64.xz" } | Select-Object -First 1
+            $webClient = New-Object System.Net.WebClient
+            $webClient.DownloadFile($asset.browser_download_url, "$desktop\$($asset.name)")
+        } catch {}
+
+        # Duvar kağıdını ayarla
+        reg add "HKCU\Control Panel\Desktop" /v Wallpaper /t REG_SZ /d "$userDir\wallpaper.jpg" /f
+        RUNDLL32.EXE user32.dll,UpdatePerUserSystemParameters ,1 ,True
+
+        # HATA DÜZELTMESİ: Kurulumdan önce dosyanın varlığını kontrol et
+        if (Test-Path "$desktop\HttpToolkit.exe") { Start-Process "$desktop\HttpToolkit.exe" }
+        if (Test-Path "$desktop\MuMuPlayer.exe") { Start-Process "$desktop\MuMuPlayer.exe" }
+
+    - name: Keep Alive
+      shell: powershell
+      run: |
+        $i = 43800
+        do { Start-Sleep 60; $i-- } while ($i -gt 0)
